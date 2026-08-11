@@ -1,0 +1,42 @@
+{
+  "KNDPMCAC5N7000123": {
+    "make": "Kia",
+    "model": "Sportage",
+    "year": 2022,
+    "engine_l": 2.4,
+    "body_class": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+    "fuel": "Gasoline",
+    "plant_country": "SOUTH KOREA",
+    "error_code": "1"
+  },
+  "KM8K2CAB4NU000321": {
+    "make": "Hyundai",
+    "model": "Kona",
+    "year": 2022,
+    "engine_l": 2.0,
+    "body_class": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+    "fuel": "Gasoline",
+    "plant_country": "SOUTH KOREA",
+    "error_code": "1"
+  },
+  "3CZRZ2H50PM000654": {
+    "make": "Honda",
+    "model": "Hr-V",
+    "year": 2023,
+    "engine_l": 2.0,
+    "body_class": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+    "fuel": "Gasoline",
+    "plant_country": "MEXICO",
+    "error_code": "1"
+  },
+  "7MUDAAAG0NV000987": {
+    "make": "Toyota",
+    "model": "Corolla Cross",
+    "year": 2022,
+    "engine_l": 2.0,
+    "body_class": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+    "fuel": "Gasoline",
+    "plant_country": "UNITED STATES (USA)",
+    "error_code": "1"
+  }
+}

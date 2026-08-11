@@ -1,0 +1,27 @@
+{
+  "2022|2.4|False|False|False|False|False": {
+    "Sabgad": "144",
+    "Aqcizi": "3600",
+    "sum": "3744"
+  },
+  "2022|2.5|False|False|False|False|False": {
+    "Sabgad": "150",
+    "Aqcizi": "3750",
+    "sum": "3900"
+  },
+  "2021|2.5|False|False|False|False|False": {
+    "Sabgad": "156.25",
+    "Aqcizi": "3750",
+    "sum": "3906.25"
+  },
+  "2022|2.0|False|False|False|False|False": {
+    "Sabgad": "120",
+    "Aqcizi": "3000",
+    "sum": "3120"
+  },
+  "2023|2.0|False|False|False|False|False": {
+    "Sabgad": "115",
+    "Aqcizi": "3000",
+    "sum": "3115"
+  }
+}
