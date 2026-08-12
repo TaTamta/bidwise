@@ -1,21 +1,23 @@
 # negotiation.py — the only desk where two agents argue.
-# They talk THROUGH the transcript; agents have no telepathy. A rule reads the
-# verdict out of what they said. Agents decide in-or-out; rules set the money.
+#
+# They talk THROUGH the transcript; agents have no telepathy. They may reach for
+# tools mid-turn to verify a claim rather than assert it. A rule reads the verdict
+# out of what they said — re.search cannot be persuaded.
 
 import re
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain.chat_models import init_chat_model
+from langchain.agents import create_agent
 from repo import market_price, buyer_profile
+from tools import DEFENDER_TOOLS, CRITIC_TOOLS
 
 MODEL = "anthropic:claude-sonnet-5"
-model = init_chat_model(MODEL)
 
 MAX_ROUNDS = 3   # critic turns. Then she decides, rather than looping forever.
 
-# the rule that reads the verdict. MULTILINE so it matches the signal wherever
-# in the reply the agent put it — not just at the start.
+# the rules that read the outcome. MULTILINE so the signal is found wherever
+# in the reply the agent put it.
 VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(IN|OUT)\b", re.I | re.M)
 ACCEPT_RE = re.compile(r"^\s*ACCEPT\b", re.I | re.M)
 
@@ -23,25 +25,35 @@ DEFENDER_SYSTEM = """You are the BUYER'S DEFENDER in an internal review of a sal
 from a US auction. Your job is to argue for the car when it deserves it: budget headroom,
 saving against the Tbilisi market price, and what the evidence actually shows.
 
-Be honest, not promotional. If the critic raises a real problem — fraud pattern, structural
+You have tools. Use them before making a claim you can't otherwise support — check the local
+price, the auction norm, or what a repair actually costs in Tbilisi rather than asserting it.
+
+Be honest, not promotional. If the critic raises a real problem — a fraud pattern, structural
 risk, a repair range that swallows the saving — concede it. You are not a salesman; you exist
 so that good cars aren't thrown away by an over-cautious system.
 
 2-3 sentences per turn. If the critic has convinced you the car should be dropped, put the
-word ACCEPT alone on its own line (first or last line of your reply)."""
+word ACCEPT alone on its own line."""
 
 CRITIC_SYSTEM = """You are the RISK CRITIC in an internal review of a salvage car from a US
 auction. Your job is to find the reason this car is a trap: fraud flags, what the market may
 know that the listing doesn't say, hidden damage the estimator warned about, and the high end
 of the repair range.
 
+You have tools. Verify before you accuse — pull the VIN's auction history, decode the VIN
+against the manufacturer's record, or check what a repair really costs, rather than
+speculating.
+
 Be skeptical, not reflexively negative. A cosmetically damaged car with a clean history and
 real savings is a good buy, and saying so is part of your job.
 
-2-3 sentences per turn. When you are ready to commit, put your verdict on its own line
-(first or last line of your reply), exactly one of:
+2-3 sentences per turn. When you are ready to commit, put your verdict on its own line,
+exactly one of:
 VERDICT: IN
 VERDICT: OUT"""
+
+defender = create_agent(model=MODEL, tools=DEFENDER_TOOLS, system_prompt=DEFENDER_SYSTEM)
+critic = create_agent(model=MODEL, tools=CRITIC_TOOLS, system_prompt=CRITIC_SYSTEM)
 
 
 def case_brief(car):
@@ -52,7 +64,7 @@ def case_brief(car):
 
     lines = [
         f"CAR: {l['year']} {l['make']} {l['model']}, {l.get('mileage_km', 0):,} km, "
-        f"{l['title_status']} title",
+        f"{l['title_status']} title  ·  VIN {l['vin']}",
         f"DAMAGE: {l['damage_description']}",
         f"BID NOW: ${l['current_bid_usd']:,.0f}   AUCTION ENDS: {l['auction_end_date']}",
         f"LANDED COST: ${landed['landed_total_usd']:,.0f} "
@@ -75,10 +87,13 @@ def case_brief(car):
     return "\n".join(lines)
 
 
-def _speak(system, brief, transcript, instruction):
+def _speak(agent, brief, transcript, instruction):
+    """Agents, not bare model calls — they may reach for tools mid-turn.
+    The system prompt already lives inside the agent."""
     convo = "\n\n".join(transcript) or "(you open the review)"
-    prompt = f"{brief}\n\nREVIEW SO FAR:\n{convo}\n\n{instruction}"
-    return model.invoke([("system", system), ("user", prompt)]).text.strip()
+    r = agent.invoke({"messages": [
+        ("user", f"{brief}\n\nREVIEW SO FAR:\n{convo}\n\n{instruction}")]})
+    return r["messages"][-1].text.strip()
 
 
 def negotiate(car, verbose=True):
@@ -92,7 +107,7 @@ def negotiate(car, verbose=True):
 
     while rounds < MAX_ROUNDS:
         # ── defender speaks ──
-        text = _speak(DEFENDER_SYSTEM, brief, transcript,
+        text = _speak(defender, brief, transcript,
                       "Make your case for this car, or answer the critic's last point.")
         transcript.append(f"DEFENDER: {text}")
         if verbose:
@@ -103,14 +118,14 @@ def negotiate(car, verbose=True):
             break
 
         # ── critic answers ──
-        text = _speak(CRITIC_SYSTEM, brief, transcript,
+        text = _speak(critic, brief, transcript,
                       "Answer the defender. Commit to a verdict as soon as you can defend one.")
         transcript.append(f"CRITIC: {text}")
         rounds += 1
         if verbose:
             print(f"\n  ⚔  {text}")
 
-        m = VERDICT_RE.search(text)          # rule reads the verdict; it can't be persuaded
+        m = VERDICT_RE.search(text)          # rule reads the verdict
         if m:
             verdict, ended_by = m.group(1).upper(), "critic committed"
             break

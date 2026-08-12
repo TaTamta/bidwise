@@ -14,9 +14,9 @@ from costs import landed_cost, early_budget_check
 from flags import fraud_flags
 from estimator import estimate_repairs
 from check import full_check, dispatch
-from negotiation import case_brief, bid_ceiling, MAX_ROUNDS, \
-    DEFENDER_SYSTEM, CRITIC_SYSTEM, _speak, ACCEPT_RE, VERDICT_RE
 from ranking import score_car
+from negotiation import (case_brief, bid_ceiling, MAX_ROUNDS,
+                         defender, critic, _speak, ACCEPT_RE, VERDICT_RE)
 
 
 def _audit(state, line):
@@ -78,12 +78,11 @@ def node_rank(state: CarState):
     if state.get("bid_ceiling_usd") is None:
         out["bid_ceiling_usd"] = bid_ceiling(car)
         out["is_recommendation"] = True
-        out["audit"] = out["audit"] + [
-            f"bid ceiling (rule): ${out['bid_ceiling_usd']:,.0f}"]
+        out["audit"] = out["audit"] + [f"bid ceiling (rule): ${out['bid_ceiling_usd']:,.0f}"]
     return out
 
 
-# ─────────────────────── the negotiation, as turn-taking nodes ───────────────────────
+# ─────────────────── the negotiation, as turn-taking nodes ───────────────────
 
 def _car_from_state(state):
     return {"listing": state["listing"], "landed": state["landed"], "flags": state["flags"],
@@ -94,7 +93,7 @@ def _car_from_state(state):
 def node_defender(state: CarState):
     car = _car_from_state(state)
     transcript = state.get("transcript", [])
-    text = _speak(DEFENDER_SYSTEM, case_brief(car), transcript,
+    text = _speak(defender, case_brief(car), transcript,
                   "Make your case for this car, or answer the critic's last point.")
     return {"transcript": transcript + [f"DEFENDER: {text}"],
             "audit": _audit(state, "defender spoke")}
@@ -103,7 +102,7 @@ def node_defender(state: CarState):
 def node_critic(state: CarState):
     car = _car_from_state(state)
     transcript = state.get("transcript", [])
-    text = _speak(CRITIC_SYSTEM, case_brief(car), transcript,
+    text = _speak(critic, case_brief(car), transcript,
                   "Answer the defender. Commit to a verdict as soon as you can defend one.")
     rounds = state.get("rounds", 0) + 1
     return {"transcript": transcript + [f"CRITIC: {text}"], "rounds": rounds,
@@ -130,11 +129,11 @@ def node_settle(state: CarState):
            "bid_ceiling_usd": bid_ceiling(car) if verdict in ("IN", "UNDECIDED") else None,
            "alive": verdict != "OUT",
            "audit": _audit(state, f"settle: verdict {verdict} ({ended_by})")}
+
     if verdict == "OUT":
         raw = last.replace("CRITIC: ", "").strip()
-        # cut at a sentence end so the report doesn't inherit a fragment
         cut = raw[:400]
-        if "." in cut:
+        if "." in cut:                      # cut at a sentence end, not mid-word
             cut = cut[:cut.rfind(".") + 1]
         out.update(kill_tier="explain", kill_reason=f"lost the review — {cut}")
     return out
@@ -149,18 +148,18 @@ def alive_or_dead(next_node):
     return _fork
 
 
-def fork_dispatch(state: CarState):
-    """THE fork. Four tripwires, all deterministic."""
-    d = dispatch(state["flags"], state["check"], state["estimate"])
-    return "defender" if d["route"] == "negotiation" else "rank"
-
-
 def node_route_note(state: CarState):
     """Records WHY the fork sent this car where it did — the auditable answer to
     'why was this car debated?'"""
     d = dispatch(state["flags"], state["check"], state["estimate"])
     return {"route": d["route"], "route_reason": d["why"],
             "audit": _audit(state, f"fork → {d['route']} ({d['why']})")}
+
+
+def fork_dispatch(state: CarState):
+    """THE fork. Four tripwires, all deterministic."""
+    d = dispatch(state["flags"], state["check"], state["estimate"])
+    return "defender" if d["route"] == "negotiation" else "rank"
 
 
 def after_defender(state: CarState):
@@ -213,6 +212,6 @@ def build_graph(checkpointer=None):
 
 
 def open_graph(db_path="bidwise.sqlite"):
-    """Context manager: yields a graph with SQLite-backed state that survives restarts."""
+    """Yields a graph with SQLite-backed state that survives restarts."""
     conn = sqlite3.connect(db_path, check_same_thread=False)
     return build_graph(SqliteSaver(conn)), conn
