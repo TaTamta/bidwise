@@ -1,3 +1,6 @@
+bidwise.sqlite
+customs_cache.json
+vin_cache.json
 .venv/
 .env
 __pycache__/
