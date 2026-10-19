@@ -3,6 +3,7 @@
 #
 # Run: streamlit run ui.py
 
+import re
 import sqlite3
 from datetime import date
 
@@ -77,6 +78,22 @@ def desk_line(text, kind="rule"):
     return f'<div class="desk desk-{kind}">{text}</div>'
 
 
+def no_math(text):
+    """Streamlit reads $...$ as LaTeX, which turns a pair of amounts into
+    gibberish and swallows both dollar signs. Everything this app prints is
+    money, so escape the dollar signs before markdown ever sees them."""
+    return str(text).replace("$", "\\$")
+
+
+def inline_md(text):
+    """Streamlit does not parse markdown inside a raw HTML block, so **bold**
+    and *italic* arrive as literal asterisks. The agents write both, and the
+    turn bodies are rendered as HTML — convert the little they actually use."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", r"<em>\1</em>", text)
+    return text
+
+
 if go:
     conn = sqlite3.connect("bidwise.sqlite", check_same_thread=False)
     app = build_graph(SqliteSaver(conn))
@@ -114,10 +131,11 @@ if go:
                     debate_started = True
                 for t in turns[seen_turns:]:
                     who = "def" if t.startswith("DEFENDER") else "crit"
-                    icon = "🛡 **Defender**" if who == "def" else "⚔ **Critic**"
+                    icon = ("🛡 <strong>Defender</strong>" if who == "def"
+                            else "⚔ <strong>Critic</strong>")
                     body = t.split(": ", 1)[1] if ": " in t else t
                     debate_box.markdown(
-                        f'<div class="turn turn-{who}">{icon}<br>{body}</div>',
+                        f'<div class="turn turn-{who}">{icon}<br>{inline_md(body)}</div>',
                         unsafe_allow_html=True)
                 seen_turns = len(turns)
 
@@ -156,7 +174,7 @@ if go:
                 tier = final.get("kill_tier")
                 (explained if tier == "explain" else silent).append(
                     (final["listing"], final.get("kill_reason", "")))
-                st.error(f"**{tier}** — {final.get('kill_reason', '')[:300]}")
+                st.error(no_math(f"**{tier}** — {final.get('kill_reason', '')[:300]}"))
 
     conn.close()
 
@@ -173,7 +191,7 @@ if go:
             bits.append(f"max bid ${car['bid_ceiling_usd']:,.0f}")
         if car["negotiation"]:
             bits.append("🤝 survived review")
-        st.write("  ·  ".join(bits))
+        st.write(no_math("  ·  ".join(bits)))
 
     # ── report ──
     st.divider()
@@ -188,7 +206,7 @@ if go:
         st.warning("Compliance never cleared this report — it goes to her flagged.")
         with st.expander("What compliance objected to"):
             st.text(out["feedback"])
-    st.markdown(out["report"])
+    st.markdown(no_math(out["report"]))
 
     # ── alerts ──
     st.divider()
@@ -203,8 +221,8 @@ if go:
         if verdict["alert"]:
             found = True
             l = car["listing"]
-            st.info(f"**{l['year']} {l['make']} {l['model']}** — ends in "
-                    f"{gate['hours_left']}h\n\n{verdict['why']}")
+            st.info(no_math(f"**{l['year']} {l['make']} {l['model']}** — ends in "
+                            f"{gate['hours_left']}h\n\n{verdict['why']}"))
     if not found:
         st.write("Nothing ends soon enough, or nothing was worth interrupting her week for.")
 
