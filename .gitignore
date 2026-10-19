@@ -4,3 +4,4 @@ vin_cache.json
 .venv/
 .env
 __pycache__/
+run_log.txt

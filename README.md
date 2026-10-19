@@ -3,6 +3,12 @@
 An agent system that helps a Georgian buyer evaluate salvage-title cars from US auctions
 and decide what to bid.
 
+![BidWise running a weekly search](docs/demo.gif)
+
+*One real run: six listings in, the rule desks firing in order, the two agents arguing the
+borderline cars, and a ranked shortlist with a recommended max bid coming out. Nothing is
+sped up except the waiting.*
+
 **The system never bids.** It reads listings, computes real landed costs against live
 government data, screens for fraud patterns, argues the borderline cases out loud between
 two opposed agents, and hands the buyer a ranked shortlist with a recommended maximum bid.
@@ -210,6 +216,7 @@ tools.py        tools the defender and critic can call (VIN record, past auction
 ranking.py      rule · weighted score on her stated preference order
 report.py       agents · drafter ⇄ compliance critic, max 2 rewrites
 state.py        the case file every desk reads and writes
+console.py      UTF-8 stdout, so the report's glyphs survive a Windows console
 graph.py        the org chart, wired as a LangGraph StateGraph
 run.py          entry point: search → rank → report → alerts
 ui.py           Streamlit front end, streaming the graph node by node

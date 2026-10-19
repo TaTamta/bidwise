@@ -4,7 +4,8 @@
 
 import sqlite3
 from datetime import datetime, date
-from typing_extensions import final
+
+from console import use_utf8
 
 from repo import get_listings, buyer_profile
 from graph import build_graph
@@ -128,6 +129,8 @@ def find_alerts(shortlist):
 # ─────────────────────────── entry point ───────────────────────────
 
 if __name__ == "__main__":
+    use_utf8()
+
     print("═" * 66)
     print("BidWise — weekly search")
     print("═" * 66)

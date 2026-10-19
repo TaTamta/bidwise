@@ -9,6 +9,8 @@
 import sqlite3
 from datetime import date, timedelta
 
+from console import use_utf8
+
 from langgraph.checkpoint.sqlite import SqliteSaver
 from graph import build_graph
 from filters import hard_filters
@@ -18,6 +20,8 @@ from check import full_check, dispatch
 from intake import intake_listing, intake_brief
 from report import build_report
 from repo import get_listing
+
+use_utf8()
 
 PASS, FAIL = "✅ PASS", "❌ FAIL"
 results = []

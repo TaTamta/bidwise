@@ -1,8 +1,19 @@
-langgraph
-langgraph-checkpoint-sqlite
-langchain
-langchain-anthropic
-langsmith
-python-dotenv
-requests
-streamlit
+# BidWise dependencies — pinned to the versions this pipeline was built and
+# tested against (Python 3.14.3). Install: pip install -r requirements.txt
+#
+# These are the direct dependencies only; pip resolves the rest. To reproduce
+# the full tree exactly, use: pip freeze > requirements.lock
+
+# Graph runtime + the SQLite checkpointer that persists state across restarts
+langgraph==1.2.10
+langgraph-checkpoint-sqlite==3.1.1
+
+# Model plumbing for the judgment desks, and the tracing they report to
+langchain==1.3.14
+langchain-anthropic==1.5.3
+langsmith==0.10.13
+
+# Config, the live rs.ge customs + NBG FX calls, and the demo UI
+python-dotenv==1.2.2
+requests==2.34.2
+streamlit==1.61.1
