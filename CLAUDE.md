@@ -59,7 +59,7 @@ high standards. Her requirements table (this is the spec; every row is implement
 | R3 | Estimate repair as a RANGE; compute landed cost; enforce ceiling and 85%-of-market | Judgment estimates; Rule computes & enforces |
 | R4 | Route: clean cars ranked by rule score; borderline cars argued in/out by two agents | Rule routes; two agents negotiate |
 | R5 | Mid-week alert if an exceptional car ends soon | Rule gates (<48h); Judgment decides |
-| R6 | Detect fraud flags: repeat VIN, suspiciously cheap vs auction baseline | Rule detects; Judgment interprets in the negotiation |
+| R6 | Detect fraud flags: repeat VIN, suspiciously cheap vs auction baseline, listing vs VIN mismatch | Rule detects; Judgment interprets in the negotiation |
 | R7 | Weekly report: costs, flags, max bid, why-nots for near misses | Judgment compiles; rule-like critic gates |
 | R8 | Only she ever bids | Human |
 
@@ -77,23 +77,51 @@ Key numbers from the discovery interview:
 
 ---
 
-## Current state — what is built and working
+## Current state — the full pipeline is built
+
+Everything in the requirements table is implemented, wired into LangGraph, tested and
+demoed. README.md is the public write-up; keep it and this file in sync.
 
 ```
-data.py        LISTINGS (5 mock cars), AUCTION_HISTORY, MARKET_PRICES,
-               AUCTION_BASELINES, REPAIR_REFERENCE, RATES, BUYER_PROFILE
-repo.py        THE ONLY FILE THAT KNOWS WHERE DATA LIVES.
-               accessors + live rs.ge customs API + live NBG FX API
-filters.py     hard_filters()          — Rule, silent kill
-costs.py       landed_cost(), early_budget_check()  — Rule
-flags.py       fraud_flags()           — Rule, detects only, never kills
-estimator.py   estimate_repairs()      — Judgment, returns low/likely/high + line items
-check.py       full_check(), dispatch() — Rule computes, Rule routes (the fork)
-intake.py      intake_brief(), intake_listing() — Judgment + normalization
-test_pipeline.py  runs all 5 cars through everything, prints each car's fate
+data.py           mock data: 6 LISTINGS, AUCTION_HISTORY, MARKET_PRICES,
+                  AUCTION_BASELINES, REPAIR_REFERENCE, RATES, BUYER_PROFILE
+repo.py           THE ONLY FILE THAT KNOWS WHERE DATA LIVES.
+                  accessors + live rs.ge customs + live NBG FX + NHTSA vPIC VIN decode,
+                  all cached, all with fallbacks
+intake.py         intake_brief(), intake_listing()   — Judgment + normalization
+filters.py        hard_filters()                     — Rule, silent kill
+costs.py          landed_cost(), early_budget_check() — Rule
+flags.py          fraud_flags()                      — Rule, detects only, never kills
+                  (repeat VIN, too cheap vs baseline, listing vs VIN mismatch)
+estimator.py      estimate_repairs()                 — Judgment, low/high + line items
+check.py          full_check(), dispatch()           — Rule computes, Rule routes (the fork)
+negotiation.py    negotiate(), bid_ceiling()         — two agents, regex verdict, MAX_ROUNDS = 3
+tools.py          tools the negotiators may call mid-turn (vin_record, past_auctions,
+                  tbilisi_price, auction_norm, repair_price)
+ranking.py        score_car(), build_shortlist()     — Rule, her preference order
+report.py         drafter ⇄ compliance critic, MAX_REWRITES = 2
+state.py          CarState — the case file; `audit` is the trail every node appends to
+graph.py          LangGraph StateGraph; SqliteSaver checkpointer via open_graph()
+run.py            run_search(): every listing → graph → shortlist → report → alerts
+                  (alert_gate is the Rule, alert_judge the Judgment)
+ui.py             Streamlit front end, streams the graph node by node
+console.py        use_utf8() — keeps box-drawing/emoji output from crashing Windows consoles
+test_ugly_paths.py  evaluation harness — asserts direction and routing, never exact amounts
 ```
 
-### Live external APIs (both working, both cached, both with fallbacks)
+### Graph shape
+
+```
+START → filters → landed → flags → estimate → check → route_note
+          │         │                          │          │
+          └─ END    └─ END                     └─ END     ├─ clean ──────────→ rank → END
+          (each rule desk can end the run)                └─ borderline → defender ⇄ critic
+                                                                       → settle → rank | END
+```
+
+`after_defender`: `ACCEPT` → settle. `after_critic`: `VERDICT: IN|OUT` or rounds ≥ 3 → settle.
+
+### Live external APIs (all cached, all with fallbacks)
 
 **rs.ge customs calculator** — unauthenticated, verified against their own UI:
 ```
@@ -104,97 +132,57 @@ returns: {"Sabgad": "<customs duty GEL>", "Aqcizi": "<excise GEL>", "sum": "<tot
 ```
 Verified: 2022 / 2.4L → excise 3600, duty 144, sum 3744; site shows 4224 total, i.e.
 `sum + 480 GEL` fixed documentation. **VAT (18%) is NOT included** — we add it ourselves on
-base = car value + freight + excise + duty. Responses are cached to `customs_cache.json`.
+base = car value + freight + excise + duty. Cached to `customs_cache.json`.
 
 **NBG FX** — `GET https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/calculator/`
 with `codeFrom=USD&codeTo=GEL&quantity=1`. Cached per process, falls back to
 `RATES["gel_per_usd"]`.
 
-Both are wrapped in `repo.py` so a future FastAPI + Postgres backend is a one-file swap.
+**NHTSA vPIC** — `DecodeVinValues/{vin}`, free, no key. Cached to `vin_cache.json`. An
+unreachable decoder or unrecognised VIN returns `{}` and must never count as a mismatch.
+
+`bidwise.sqlite` and both cache files are created at runtime and gitignored — never commit
+them.
+
 **Keep all data access behind repo.py accessors. Never import `data.py` directly from a desk.**
+A future FastAPI + Postgres backend is a one-file swap.
 
-### Current behaviour of the 5 test cars
+### The 6 test listings
 
-- **Tucson** — dies at filters (flood title), silent
-- **RAV4** — dies at filters (airbags deployed, doesn't run), silent
-- **Kona** — passes, trips both fraud flags (repeat VIN + 45% of baseline) → NEGOTIATION
-- **Sportage** — passes everything, borderline-ish on the savings rule → ranked list
-- **HR-V** — clean sail-through → ranked list
+| Lot | Car | Designed to exercise |
+|---|---|---|
+| LOT-61077 | 2022 Hyundai Tucson | flood title → silent kill at filters |
+| LOT-59930 | 2021 Toyota RAV4 | airbags deployed, doesn't run → silent kill at filters |
+| LOT-62155 | 2022 Hyundai Kona | both fraud flags (repeat VIN + too cheap) → negotiation |
+| LOT-58412 | 2022 Kia Sportage | low-confidence estimate on a rear hit → borderline |
+| LOT-60488 | 2023 Honda HR-V | clean sail-through → ranked list |
+| LOT-63220 | 2022 Toyota Corolla Cross | one soft flag, trivial damage, big margin — the defender's best case |
+
+The VINs are invented, so the vPIC cross-check no-ops on them by design. Verdicts on the
+negotiated cars vary run to run. That is expected; don't "fix" it.
+
+### Commands
+
+```bash
+pip install -r requirements.txt     # pinned; built and tested on Python 3.14
+streamlit run ui.py                  # the demo
+python run.py                        # the weekly search in the terminal
+python test_ugly_paths.py            # the evaluation harness
+```
 
 ---
 
-## What is NOT built yet (in priority order)
+## Next ideas (not built — from the README's limitations)
 
-### 1. The negotiation (Phase 4b) — the last hard piece, ~2–3h
-Two agents with opposing jobs, a shared transcript, strict turn-taking, and a rule that
-extracts the verdict. Follow the session-4 advocate/adjuster pattern:
+1. **Act on an incomplete brief.** `intake_brief` already marks a brief incomplete and lists
+   what to ask; `run.py` should stop and ask her before searching on guessed constraints.
+2. **Shadow mode.** Run alongside a real search season and score recommendations against
+   what actually happened, before anything touches real money.
+3. **Real data backend.** Swap `repo.py` for FastAPI + Postgres. Still no scraping of
+   Copart/IAAI.
+4. **Grow the fraud rules** using the audit trail as training data.
 
-- **DEFENDER** — argues the car in: cites budget headroom, savings vs market, evidence.
-  Concedes real problems honestly; doesn't defend obvious fraud.
-- **CRITIC** — argues it out: fraud flags, hidden-risk from the estimate, repair spread,
-  what the market may know that the listing doesn't say.
-- They see the same case brief before every turn (listing, landed cost breakdown, flags,
-  repair range + line items + hidden_risk, market comparison).
-- 2–3 sentences per turn. The transcript IS their shared memory — agents have no telepathy.
-- **Fence: max 3 critic rounds**, then the car routes to the buyer undecided rather than
-  looping forever.
-- Exit signals: defender starts a line with `ACCEPT` (concedes the car is out), critic starts
-  with `VERDICT: IN` / `VERDICT: OUT`.
-- The verdict is extracted **by regex, in a rule** — never by asking a model what happened.
-- The full transcript rides with the car into the report. That is the audit trail.
-- **The max bid is set by rules, not by the agents.** Agents decide in/out; the number comes
-  from the savings formula (max bid = whatever keeps landed + likely repairs ≤ 85% of market).
-
-### 2. Ranking + shortlist (~1h)
-Rule-scored on her stated preference order: damage severity > owners > mileage, plus
-`soft_limits.max_mileage_km` (over the limit ranks lower, never kills) and `nice_to_have`
-(hybrid, not white). Top 5–7. Negotiation survivors join the list with their transcript
-attached.
-
-### 3. Report drafter + critic (~2h)
-- **Drafter (Judgment)**: for each shortlisted car — full cost breakdown (bid, auction fee,
-  freight, port, excise, duty, VAT, docs), flags and how the negotiation interpreted them,
-  recommended max bid, repair range with line items. Plus a why-not line for every
-  `kill_tier: "explain"` car.
-- **Critic (rule-like Judgment)**: a fixed checklist — every car has a cost breakdown? every
-  detected flag appears? every recommendation carries a max bid? every explained kill has a
-  why-not? Bounces incomplete reports back to the drafter, max 2 rewrites, then queues for
-  the buyer. This is the 12,000-GEL-fine lesson from class: nobody grades their own homework.
-
-### 4. Alert branch (~30m)
-Runs over the ranked list — it is a **copy, not a detour**. Every survivor is in the weekly
-report regardless. `alert_gate` (Rule): does this auction end within 48h? Then `alert_judge`
-(Judgment): is it worth interrupting her week, weighed against her preferences? Declining to
-alert never removes a car from the report.
-
-### 5. Wire into LangGraph (~2h)
-Every desk is already pure dict-in/dict-out, so each becomes a node with a thin wrapper.
-- `ClaimState`-style TypedDict holding: `listing`, `landed`, `flags`, `estimate`, `check`,
-  `route`, `transcript`, `rounds`, `verdict`, `max_bid`, `report`, `report_feedback`,
-  `report_approved`, `report_rounds`, `audit`.
-- `audit` is a list every node appends to — that is R8's trail, free if the state is designed
-  right.
-- Conditional edges for the fork, the negotiation turn-taking, and the critic bounce.
-- **Use `SqliteSaver` as the checkpointer**, not `InMemorySaver` — state should survive
-  restarts.
-- Render the mermaid graph and compare it against the org chart. That comparison is a design
-  review.
-
-### 6. Ugly-path testing (~1.5h)
-Flooded car, over-budget-after-repairs, deadlocked negotiation (hits the 3-round fence),
-failed extraction, failed repair estimate, incomplete report bouncing twice. Assert on
-**decision direction and routing**, not exact dollar amounts — judgment has variance and
-pretending otherwise is dishonest testing.
-
-### 7. UI (~4–6h, stretch goal — cut this before cutting anything else)
-Streamlit or Gradio: paste a listing → watch desks light up → the negotiation streams turn by
-turn → final report card. The negotiation streaming is the demo moment. **Do not start this
-until the pipeline and tests pass.** A working pipeline with printed output beats a pretty
-shell around a broken graph.
-
-### Optional, cheap, nice-to-have
-NHTSA vPIC VIN decode (free, no key, `requests.get`) as a `@tool` cross-checking the listing's
-claims against the VIN — listing says 2.4L, VIN says 2.0L → flag. ~20 minutes whenever.
+Any new desk must follow the Rule / Judgment / Human tagging and the conventions below.
 
 ---
 
@@ -222,9 +210,9 @@ claims against the VIN — listing says 2.4L, VIN says 2.0L → flag. ~20 minute
    noticeably different ranges run to run. Mitigation: ranges not points; rules consume the
    conservative end.
 2. Listings lie, and intake reads language. Mitigation: the extracted form rides on every
-   report; `extraction_confidence` is recorded; vPIC cross-check (when added) catches spec
-   mismatches.
-3. Fraud detection is two rules; real fraud adapts. Mitigation: the flag list is designed to
+   report; `extraction_confidence` is recorded; the vPIC cross-check catches year, make and
+   engine mismatches (not damage, mileage or title history).
+3. Fraud detection is three rules; real fraud adapts. Mitigation: the flag list is designed to
    grow, and the audit trail is training data for better rules.
 4. Listings are snapshot mock data — no scraping (Copart/IAAI prohibit it and sit behind
    anti-bot). Customs and FX are live and official. Production swaps `repo.py` for a real
