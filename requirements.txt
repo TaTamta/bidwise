@@ -1,0 +1,8 @@
+langgraph
+langgraph-checkpoint-sqlite
+langchain
+langchain-anthropic
+langsmith
+python-dotenv
+requests
+streamlit

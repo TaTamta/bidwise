@@ -75,7 +75,8 @@ LANDED COST ───────────► ☠ silent kill (already over b
    │  bid + auction fee + freight + port + excise + duty + VAT + docs
    ▼
 FLAG DESK                 flags never kill — they travel to the fork
-   │  repeat VIN within 180 days · bid < 50% of the model's auction baseline
+   │  repeat VIN within 180 days · bid < 50% of the model's auction baseline ·
+   │  listing vs. VIN-decoded year, make and engine size
    ▼
 REPAIR ESTIMATE           agent · returns a RANGE, never a point
    │  costed line items grounded in Tbilisi shop prices + a hidden-risk caveat
@@ -120,7 +121,7 @@ most important engineering decision per row.
 | R3 | Estimate repairs as a range; compute landed cost; enforce the ceiling and the 85% rule | Judgment estimates; Rule computes & enforces | `estimator.py`, `costs.py`, `check.py` |
 | R4 | Route: clean cars ranked; borderline cars argued in/out by two agents | Rule routes; agents negotiate | `check.py`, `negotiation.py` |
 | R5 | Mid-week alert if an exceptional car ends soon | Rule gates (<48h); Judgment decides | `run.py` |
-| R6 | Detect fraud flags: repeat VIN, suspiciously cheap vs auction baseline | Rule detects; Judgment interprets in the review | `flags.py` |
+| R6 | Detect fraud flags: repeat VIN, suspiciously cheap vs auction baseline, listing that contradicts its VIN | Rule detects; Judgment interprets in the review | `flags.py` |
 | R7 | Weekly report: costs, flags, max bid, why-nots | Judgment compiles; rule-like critic gates | `report.py` |
 | R8 | Only she ever bids | Human | everywhere, by omission |
 
@@ -140,8 +141,7 @@ Key numbers, all from the interview:
 
 ## Live data
 
-Two real government APIs, both cached, both with offline fallbacks so a demo survives a
-dead connection.
+Three free official APIs, all cached, with fallbacks so a demo survives a dead connection.
 
 **rs.ge customs calculator** — official excise and customs duty, verified against the
 site's own UI (2022 / 2.4L → excise 3,600 GEL, duty 144 GEL; the site's 4,224 GEL total is
@@ -149,6 +149,10 @@ site's own UI (2022 / 2.4L → excise 3,600 GEL, duty 144 GEL; the site's 4,224 
 system adds 18% on a base of car value + freight + excise + duty.
 
 **National Bank of Georgia** — live USD/GEL rate.
+
+**NHTSA vPIC** — decodes the manufacturer's own year, make and engine size from the VIN.
+A listing that contradicts its VIN gets a flag; since customs is calculated on engine size,
+a wrong engine means a wrong landed cost. An unreachable decoder never counts as a mismatch.
 
 So the landed cost isn't a guess. It's the tax authority's own number and the central bank's
 own rate.
@@ -160,18 +164,14 @@ snapshots (see limitations).
 
 ## Running it
 
+Requires Python 3.11+ and an Anthropic API key. LangSmith tracing is optional.
+
 ```bash
-pip install langgraph langchain langchain-anthropic langgraph-checkpoint-sqlite \
-            python-dotenv langsmith streamlit
-```
-
-`.env`:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY=lsv2_...
-LANGSMITH_PROJECT=bidwise
+git clone https://github.com/TaTamta/bidwise.git
+cd bidwise
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env        # then set ANTHROPIC_API_KEY (and LangSmith, if you use it)
 ```
 
 ```bash
@@ -179,11 +179,10 @@ streamlit run ui.py         # the interface — desks light up in order, the rev
                             # streams turn by turn, then the report and alerts
 python run.py               # the same weekly search, in the terminal
 python test_ugly_paths.py   # the evaluation harness (41 checks)
-python test_graph.py        # per-car run with the audit trail printed
-python test_intake.py       # the two intake agents on messy input
 ```
 
-State is checkpointed to `bidwise.sqlite`, so runs survive restarts. Every model call is
+State is checkpointed to `bidwise.sqlite`, so runs survive restarts. The database and the
+API caches (`customs_cache.json`, `vin_cache.json`) are created at runtime and not committed. Every model call is
 traced in LangSmith.
 
 The UI streams the graph node by node (`app.stream(..., stream_mode="values")`) rather than
@@ -198,7 +197,8 @@ real time instead of seeing a finished transcript appear at once.
 data.py         listings, auction history, market prices, auction baselines,
                 repair reference, rates, buyer profile
 repo.py         THE ONLY FILE THAT KNOWS WHERE DATA COMES FROM
-                accessors + live rs.ge customs + live NBG FX, cached with fallbacks
+                accessors + live rs.ge customs + live NBG FX + NHTSA VIN decode,
+                cached with fallbacks
 intake.py       agent · brief → requirements form, raw listing → listing dict
 filters.py      rule · hard dealbreakers, silent kills
 costs.py        rule · full landed cost breakdown + early budget kill
@@ -206,6 +206,7 @@ flags.py        rule · fraud detection (detects only, never kills)
 estimator.py    agent · repair ranges with costed line items
 check.py        rule · the full check and the fork
 negotiation.py  agents · defender ⇄ critic, verdict extracted by regex
+tools.py        tools the defender and critic can call (VIN record, past auctions, ...)
 ranking.py      rule · weighted score on her stated preference order
 report.py       agents · drafter ⇄ compliance critic, max 2 rewrites
 state.py        the case file every desk reads and writes
@@ -254,9 +255,9 @@ a wrongly-passed one costs money.
    produced noticeably different ranges across runs. Mitigation: ranges not points, and the
    rules consume them conservatively. The number is shown to her, never enforced as a limit.
 2. **Listings lie, and intake reads language.** Mitigation: the extracted form rides on
-   every report and records an extraction confidence. A VIN-decode cross-check (NHTSA vPIC)
-   is designed but not built.
-3. **Fraud detection is two rules; real fraud adapts.** Mitigation: the flag list is built to
+   every report and records an extraction confidence, and the VIN decode cross-checks year,
+   make and engine size. It can't see damage, mileage or title history, though.
+3. **Fraud detection is three rules; real fraud adapts.** Mitigation: the flag list is built to
    grow, and the audit trail is the training data for better rules.
 4. **Listings are snapshot data.** Copart and IAAI prohibit scraping and sit behind anti-bot
    protection. Customs and FX are live and official; everything else is hand-copied.
